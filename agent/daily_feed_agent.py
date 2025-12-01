@@ -81,7 +81,6 @@ def _select_largest_text_container(candidates):
 
 
 def extract_article_text(url: str) -> str:
-    """Scrapes full article text."""
     try:
         r = requests.get(url, timeout=10)
     except:
@@ -99,7 +98,7 @@ def extract_article_text(url: str) -> str:
 
 
 # ============================================================
-# Feed Engine
+# Feed Engine Functions
 # ============================================================
 
 def add_source(url: str):
