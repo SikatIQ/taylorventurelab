@@ -1,14 +1,120 @@
-import feedparser
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# In-memory storage for simplicity (you can swap to DB later)
+"""
+TaylorVentureLab — Feed Engine & Automation Layer
+Merged version:
+- Full feed parsing and filtering
+- Article extraction (best container)
+- Summaries (mock or LLM)
+- Daily digest builder
+- Source management
+- URL capture
+- Feed caching for API
+"""
+
+import os
+import re
+import time
+import calendar
+import json
+import requests
+import feedparser
+
+from bs4 import BeautifulSoup
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+
+# Optional OpenAI summarizer
+try:
+    from agent.llm_summarizer import summarize_article
+    OPENAI_AVAILABLE = True
+except Exception:
+    OPENAI_AVAILABLE = False
+
+
+# ============================================================
+# In-memory storage
+# ============================================================
+
 SOURCES: List[str] = []
 FEED_CACHE: List[Dict[str, Any]] = []
 LAST_DIGEST: Dict[str, Any] = {}
 
+
+# ============================================================
+# Configuration
+# ============================================================
+
+load_dotenv()
+
+TIME_WINDOW_HOURS = int(os.getenv("TIME_WINDOW_HOURS", 24))
+SUMMARY_MODEL_NAME = os.getenv("SUMMARY_MODEL_NAME", "gpt-4o-mini")
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def _safe_struct_time_to_utc_dt(t: time.struct_time) -> Optional[datetime]:
+    if not t:
+        return None
+    try:
+        ts = calendar.timegm(t)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except:
+        return None
+
+
+@dataclass
+class ArticleSummary:
+    title: str
+    link: str
+    source: str
+    published_date: str
+    categories: List[str] = field(default_factory=list)
+    summary: str = ""
+    _raw_excerpt: Optional[str] = None
+
+
+def _select_largest_text_container(candidates):
+    best_node, best_len = None, 0
+    for node in candidates:
+        try:
+            text = " ".join(
+                p.get_text(" ", strip=True) for p in node.find_all("p")
+            )
+            if len(text) > best_len:
+                best_len = len(text)
+                best_node = node
+        except:
+            continue
+    return best_node
+
+
+def extract_article_text(url: str) -> str:
+    """Scrapes full article text and returns extracted paragraphs."""
+    try:
+        r = requests.get(url, timeout=10)
+    except:
+        return ""
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    candidates = soup.find_all(["article", "section", "div"])
+
+    best = _select_largest_text_container(candidates)
+    if not best:
+        return ""
+
+    paragraphs = [p.get_text(" ", strip=True) for p in best.find_all("p")]
+    return "\n".join(paragraphs)
+
+
+# ============================================================
+# Feed Functions
+# ============================================================
 
 def add_source(url: str):
     if url not in SOURCES:
@@ -21,7 +127,6 @@ def list_sources():
 
 
 def capture_url(url: str):
-    """Store or queue a URL from the extension for processing."""
     FEED_CACHE.append({
         "url": url,
         "captured_at": datetime.utcnow().isoformat()
@@ -30,58 +135,85 @@ def capture_url(url: str):
 
 
 def fetch_feed_items() -> List[Dict[str, Any]]:
-    """Fetch items from all RSS/Atom sources."""
     items = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=TIME_WINDOW_HOURS)
+
     for src in SOURCES:
         try:
             parsed = feedparser.parse(src)
+
             for entry in parsed.entries:
+                pub_dt = (
+                    _safe_struct_time_to_utc_dt(entry.get("published_parsed")) or
+                    _safe_struct_time_to_utc_dt(entry.get("updated_parsed"))
+                )
+                if not pub_dt:
+                    continue
+                if pub_dt < cutoff:
+                    continue
+
                 items.append({
                     "title": entry.get("title"),
                     "link": entry.get("link"),
                     "summary": entry.get("summary", ""),
-                    "published": entry.get("published", "")
+                    "published": pub_dt.isoformat(),
+                    "source": src
                 })
+
         except Exception as e:
-            print(f"Error loading feed {src}: {e}")
+            print(f"[Feed Error] {src}: {e}")
+
     return items
 
 
 def summarize_text(text: str) -> str:
-    """Mock summarizer (LLM integration later)."""
+    """Fallback summarizer if LLM is unavailable."""
+    if OPENAI_AVAILABLE:
+        try:
+            return summarize_article(text)
+        except:
+            pass
+
     if len(text) > 240:
         return text[:240] + "..."
     return text
 
 
+# ============================================================
+# Digest Builder
+# ============================================================
+
 def run_digest():
-    """Build a digest of all sources and recent cached items."""
     items = fetch_feed_items()
 
-    summarized = []
+    summarized_items = []
     for item in items:
-        summarized.append({
+        article_text = extract_article_text(item["link"])
+        merged_text = article_text or item["summary"]
+
+        summarized_items.append({
             "title": item["title"],
             "link": item["link"],
-            "summary": summarize_text(item["summary"])
+            "published": item["published"],
+            "source": item["source"],
+            "summary": summarize_text(merged_text)
         })
 
     LAST_DIGEST["generated_at"] = datetime.utcnow().isoformat()
-    LAST_DIGEST["items"] = summarized
+    LAST_DIGEST["items"] = summarized_items
 
     return {"digest": LAST_DIGEST}
 
 
 def get_daily_pulse():
-    """Return the latest digest or force-generate one."""
     if not LAST_DIGEST:
         run_digest()
     return LAST_DIGEST
 
 
 def get_feed():
-    """Return the local feed (captured URLs + summaries)."""
     return {
         "captured": FEED_CACHE,
-        "digest": LAST_DIGEST
+        "digest": LAST_DIGEST,
+        "sources": SOURCES
     }
