@@ -1,11 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from agent.feed_engine import run_digest, capture_url, get_daily_pulse, get_feed, add_source, list_sources
 
-app = FastAPI(title="TaylorVentureLab Feed API", version="0.1.0")
+from agent.daily_feed_agent import run_digest, get_feed, get_daily_pulse, add_source, list_sources, capture_url
+
+app = FastAPI(
+    title="TaylorVentureLab Feed API",
+    version="0.1.0"
+)
+
 
 class CaptureRequest(BaseModel):
     url: str
+
 
 class SourceRequest(BaseModel):
     url: str
@@ -38,8 +44,7 @@ def digest():
 
 @app.post("/api/add_source")
 def add_source_route(data: SourceRequest):
-    add_source(data.url)
-    return {"status": "added", "url": data.url}
+    return add_source(data.url)
 
 
 @app.get("/api/list_sources")
