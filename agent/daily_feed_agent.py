@@ -48,13 +48,12 @@ def _safe_struct_time_to_utc_dt(t: time.struct_time) -> Optional[datetime]:
         return None
 
 def _select_largest_text_container(candidates):
-    """Find the container with the most paragraph text."""
     best_node = None
     best_len = 0
     for node in candidates:
         try:
-            text = " ".join(p.get_text(" ", strip=True) for p in node.find_all("p"))
-        
+            text = " ".join(p.get_text(" ", strip=True) for p in node.find_all("p")
+            )
         except Exception:
             continue
     return best_node
