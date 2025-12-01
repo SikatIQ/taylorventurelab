@@ -1,35 +1,47 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import json
-import os
+from pydantic import BaseModel
+from agent.feed_engine import run_digest, capture_url, get_daily_pulse, get_feed, add_source, list_sources
 
-app = FastAPI(title="TaylorVentureLab Feed API")
+app = FastAPI(title="TaylorVentureLab Feed API", version="0.1.0")
 
-# Allow your browser extension to call this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class CaptureRequest(BaseModel):
+    url: str
 
-
-@app.get("/feed")
-def get_feed():
-    """
-    Returns the latest processed feed.json file created by the agent.
-    """
-    if not os.path.exists("feed.json"):
-        raise HTTPException(status_code=404, detail="feed.json not found. Run the agent first.")
-
-    try:
-        with open("feed.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading feed.json: {e}")
+class SourceRequest(BaseModel):
+    url: str
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "TaylorVentureLab Feed API running"}
+    return {"message": "TaylorVentureLab API running"}
+
+
+@app.get("/feed")
+def feed():
+    return get_feed()
+
+
+@app.post("/api/capture")
+def capture(data: CaptureRequest):
+    return capture_url(data.url)
+
+
+@app.get("/api/daily_pulse")
+def daily_pulse():
+    return get_daily_pulse()
+
+
+@app.post("/api/run_digest")
+def digest():
+    return run_digest()
+
+
+@app.post("/api/add_source")
+def add_source_route(data: SourceRequest):
+    add_source(data.url)
+    return {"status": "added", "url": data.url}
+
+
+@app.get("/api/list_sources")
+def list_sources_route():
+    return list_sources()
