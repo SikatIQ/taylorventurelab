@@ -1,145 +1,87 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-TaylorVentureLab — Daily Feed-Summarizing Agent
-
-This script fetches recent items from RSS/Atom feeds, scrapes full article
-content, classifies topics, generates summaries (LLM or heuristic),
-and outputs a JSON + Markdown digest.
-
-Dependencies:
-- requests
-- feedparser
-- beautifulsoup4
-- python-dotenv
-- openai (optional for real summaries)
-"""
-
-import os
-import re
-import time
-import calendar
-import json
-import requests
 import feedparser
-
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta, timezone
+import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
 
-# Optional OpenAI summarizer
-try:
-    from llm_summarizer import summarize_article
-    OPENAI_AVAILABLE = True
-except Exception:
-    OPENAI_AVAILABLE = False
-
-
-# =========================
-# 1) Configuration & Feeds
-# =========================
-
-load_dotenv()
-
-TIME_WINDOW_HOURS = int(os.getenv("TIME_WINDOW_HOURS", 24))
-SUMMARY_MODEL_NAME = os.getenv("SUMMARY_MODEL_NAME", "gpt-4o-mini")
-
-# Output filename for the daily digest
-OUTPUT_FILENAME = os.getenv("OUTPUT_FILENAME", "daily_digest.md")
-
-# Feed registry
-FEEDS: Dict[str, str] = {
-    "Hootsuite Blog": "https://blog.hootsuite.com/feed/",
-    "Sprout Social": "https://sproutsocial.com/insights/feed/",
-}
+# In-memory storage for simplicity (you can swap to DB later)
+SOURCES: List[str] = []
+FEED_CACHE: List[Dict[str, Any]] = []
+LAST_DIGEST: Dict[str, Any] = {}
 
 
-# =========================
-# 2) Data Model
-# =========================
-
-@dataclass
-class ArticleSummary:
-    title: str
-    link: str
-    source: str
-    published_date: str
-    categories: List[str] = field(default_factory=list)
-    summary: str = ""
-    _raw_excerpt: Optional[str] = None
+def add_source(url: str):
+    if url not in SOURCES:
+        SOURCES.append(url)
+    return {"status": "ok", "sources": SOURCES}
 
 
-# =========================
-# 3) Utilities
-# =========================
-
-def _safe_struct_time_to_utc_dt(t: time.struct_time) -> Optional[datetime]:
-    if not t:
-        return None
-    try:
-        ts = calendar.timegm(t)
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
-    except:
-        return None
+def list_sources():
+    return {"sources": SOURCES}
 
 
-def load_config() -> Dict[str, Any]:
-    load_dotenv()
-    return {
-        "TIME_WINDOW_HOURS": int(os.getenv("TIME_WINDOW_HOURS", TIME_WINDOW_HOURS)),
-        "SUMMARY_MODEL_NAME": os.getenv("SUMMARY_MODEL_NAME", SUMMARY_MODEL_NAME),
-        "OUTPUT_FILENAME": os.getenv("OUTPUT_FILENAME", OUTPUT_FILENAME),
-    }
+def capture_url(url: str):
+    """Store or queue a URL from the extension for processing."""
+    FEED_CACHE.append({
+        "url": url,
+        "captured_at": datetime.utcnow().isoformat()
+    })
+    return {"status": "captured", "url": url}
 
 
-def fetch_and_filter_feed(url: str) -> List[dict]:
-    print(f"-> Fetching feed: {url}")
-    feed = feedparser.parse(url)
+def fetch_feed_items() -> List[Dict[str, Any]]:
+    """Fetch items from all RSS/Atom sources."""
+    items = []
+    for src in SOURCES:
+        try:
+            parsed = feedparser.parse(src)
+            for entry in parsed.entries:
+                items.append({
+                    "title": entry.get("title"),
+                    "link": entry.get("link"),
+                    "summary": entry.get("summary", ""),
+                    "published": entry.get("published", "")
+                })
+        except Exception as e:
+            print(f"Error loading feed {src}: {e}")
+    return items
 
-    if feed.bozo:
-        print(f"   Warning: feed parser issue: {feed.bozo_exception}")
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=TIME_WINDOW_HOURS)
-    results = []
+def summarize_text(text: str) -> str:
+    """Mock summarizer (LLM integration later)."""
+    if len(text) > 240:
+        return text[:240] + "..."
+    return text
 
-    for entry in feed.entries:
-        pub_dt = _safe_struct_time_to_utc_dt(entry.get("published_parsed")) \
-            or _safe_struct_time_to_utc_dt(entry.get("updated_parsed"))
-        if not pub_dt:
-            continue
-        if pub_dt < cutoff:
-            continue
 
-        title = entry.get("title", "Untitled")
-        link = entry.get("link", "").strip()
+def run_digest():
+    """Build a digest of all sources and recent cached items."""
+    items = fetch_feed_items()
 
-        raw_tags = entry.get("tags", [])
-        categories = []
-        for t in raw_tags or []:
-            term = getattr(t, "term", None) or t.get("term") if isinstance(t, dict) else None
-            if term:
-                categories.append(str(term).strip())
-
-        excerpt = (entry.get("summary") or entry.get("description") or "").strip()
-
-        results.append({
-            "title": title,
-            "link": link,
-            "published_date": pub_dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "categories": categories,
-            "feed_excerpt": excerpt,
+    summarized = []
+    for item in items:
+        summarized.append({
+            "title": item["title"],
+            "link": item["link"],
+            "summary": summarize_text(item["summary"])
         })
 
-    print(f"   Found {len(results)} entries in window.")
-    return results
+    LAST_DIGEST["generated_at"] = datetime.utcnow().isoformat()
+    LAST_DIGEST["items"] = summarized
+
+    return {"digest": LAST_DIGEST}
 
 
-def _select_largest_text_container(candidates):
-    best_node, best_len = None, 0
-    for node in candidates:
-        try:
-            text = " ".join(p.get_text(" ", strip=True) for p in node.find_all("p"))
-            if len(text) > best_len:
+def get_daily_pulse():
+    """Return the latest digest or force-generate one."""
+    if not LAST_DIGEST:
+        run_digest()
+    return LAST_DIGEST
+
+
+def get_feed():
+    """Return the local feed (captured URLs + summaries)."""
+    return {
+        "captured": FEED_CACHE,
+        "digest": LAST_DIGEST
+    }
