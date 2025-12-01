@@ -52,8 +52,7 @@ def _select_largest_text_container(candidates):
     best_len = 0
     for node in candidates:
         try:
-            text = " ".join(p.get_text(" ", strip=True) for p in node.find_all("p")
-            )
+            text = " ".join(p.get_text(" ", strip=True) for p in node.find_all("p"))
         except Exception:
             continue
     return best_node
