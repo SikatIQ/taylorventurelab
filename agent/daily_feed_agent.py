@@ -55,7 +55,10 @@ def _select_largest_text_container(candidates):
             if len(text) > best_len:
                 best_len = len(text)
                 best_node = node
-                
+            if len(text) > best_len:
+    # placeholder to satisfy indentation
+    pass
+ 
         except Exception:
             continue
     return best_node
