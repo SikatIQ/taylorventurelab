@@ -1,37 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-TaylorVentureLab — Feed Engine & Automation Layer
-Merged version:
-- Full feed parsing and filtering
-- Article extraction (best container)
-- Summaries (mock or LLM)
-- Daily digest builder
-- Source management
-- URL capture
-- Feed caching for API
-"""
+# TaylorVentureLab — Feed Engine & Automation Layer
 
 import os
-import re
-import time
 import calendar
-import json
 import requests
 import feedparser
+import time
 
 from bs4 import BeautifulSoup
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Optional OpenAI summarizer
+# Optional LLM summarization
 try:
     from agent.llm_summarizer import summarize_article
     OPENAI_AVAILABLE = True
-except Exception:
+except:
     OPENAI_AVAILABLE = False
 
 
@@ -45,28 +33,16 @@ LAST_DIGEST: Dict[str, Any] = {}
 
 
 # ============================================================
-# Configuration
+# Config
 # ============================================================
 
 load_dotenv()
-
 TIME_WINDOW_HOURS = int(os.getenv("TIME_WINDOW_HOURS", 24))
-SUMMARY_MODEL_NAME = os.getenv("SUMMARY_MODEL_NAME", "gpt-4o-mini")
 
 
 # ============================================================
 # Helpers
 # ============================================================
-
-def _safe_struct_time_to_utc_dt(t: time.struct_time) -> Optional[datetime]:
-    if not t:
-        return None
-    try:
-        ts = calendar.timegm(t)
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
-    except:
-        return None
-
 
 @dataclass
 class ArticleSummary:
@@ -77,6 +53,16 @@ class ArticleSummary:
     categories: List[str] = field(default_factory=list)
     summary: str = ""
     _raw_excerpt: Optional[str] = None
+
+
+def _safe_struct_time_to_utc_dt(t: time.struct_time) -> Optional[datetime]:
+    if not t:
+        return None
+    try:
+        ts = calendar.timegm(t)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except:
+        return None
 
 
 def _select_largest_text_container(candidates):
@@ -95,7 +81,7 @@ def _select_largest_text_container(candidates):
 
 
 def extract_article_text(url: str) -> str:
-    """Scrapes full article text and returns extracted paragraphs."""
+    """Scrapes full article text."""
     try:
         r = requests.get(url, timeout=10)
     except:
@@ -113,7 +99,7 @@ def extract_article_text(url: str) -> str:
 
 
 # ============================================================
-# Feed Functions
+# Feed Engine
 # ============================================================
 
 def add_source(url: str):
@@ -147,9 +133,7 @@ def fetch_feed_items() -> List[Dict[str, Any]]:
                     _safe_struct_time_to_utc_dt(entry.get("published_parsed")) or
                     _safe_struct_time_to_utc_dt(entry.get("updated_parsed"))
                 )
-                if not pub_dt:
-                    continue
-                if pub_dt < cutoff:
+                if not pub_dt or pub_dt < cutoff:
                     continue
 
                 items.append({
@@ -167,7 +151,6 @@ def fetch_feed_items() -> List[Dict[str, Any]]:
 
 
 def summarize_text(text: str) -> str:
-    """Fallback summarizer if LLM is unavailable."""
     if OPENAI_AVAILABLE:
         try:
             return summarize_article(text)
