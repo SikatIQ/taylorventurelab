@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "TaylorVentureLab Feed",
+  "description": "AI feed automation suite popup for TaylorVentureLab.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TaylorVentureLab Feed"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}
